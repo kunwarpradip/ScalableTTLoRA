@@ -6,10 +6,9 @@ import torch.nn.functional as F
 
 ''' CustomLightningModule class is a custom implementation of a PyTorch Lightning module for training models'''
 class CustomLightningModule(pl.LightningModule):
-    def __init__(self, model, data, learning_rate):
+    def __init__(self, model, data, model_learning_rate):
         super().__init__()
-
-        self.learning_rate = learning_rate
+        self.model_learning_rate = model_learning_rate
         self.model = model
         self.data = data
         self.val_f1= torchmetrics.F1Score(task="multiclass",num_classes=2, average = 'micro')
@@ -40,7 +39,12 @@ class CustomLightningModule(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         outputs = self(batch["input_ids"], attention_mask=batch["attention_mask"],labels=batch["label"])
         self.log("train_loss", outputs["loss"])
+        print("loss",outputs["loss"])
+        # print("Loss grad_fn:", outputs["loss"].grad_fn)  # The starting point of backpropagation
+        print("gradinfo of router weights", self.model.roberta.encoder.base_module.layer[0].attention.self.query.weight.grad_fn)
+
         return outputs["loss"]  # this is passed to the optimizer for training
+
 
     def validation_step(self, batch, batch_idx):
         outputs = self(batch["input_ids"], attention_mask=batch["attention_mask"],labels=batch["label"])
@@ -76,5 +80,5 @@ class CustomLightningModule(pl.LightningModule):
             self.log("accuracy", self.test_acc, prog_bar=True)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.model_learning_rate)
         return optimizer
