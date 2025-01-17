@@ -10,17 +10,25 @@ class Router(nn.Module):
     def __init__(self, input_dim, num_experts):
         super(Router, self).__init__()
         self.router_layer = nn.Linear(input_dim, num_experts, bias=False)  # Linear layer as the router
+        # print(f"Router weights: {self.router_layer.weight.shape}, requires_grad: {self.router_layer.weight.requires_grad}")
+        print("inside constructor of Router")
+
 
     def forward(self, hidden_states):
+        # print("Inside Router Forward Method")
         #hidden state original shape: [batch_size, seq_len, hidden_size]
         # Pool hidden states (mean pooling across sequence length)
         pooled_hidden_states = hidden_states.mean(dim=1)  # Shape: (batch_size, hidden_size)
 
         # Compute routing logits using the linear layer
         routing_logits = self.router_layer(pooled_hidden_states)  # Shape: (batch_size, num_experts)
+        # routing_logits.requires_grad_(True)
+        # routing_logits.retain_grad()
 
         # Apply softmax to get routing probabilities
         routing_probs = F.softmax(routing_logits, dim=-1)  # Shape: (batch_size, num_experts)
+        # routing_probs.requires_grad_(True)
+        # routing_probs.retain_grad()
 
         return routing_probs
 
@@ -33,6 +41,7 @@ class MoEsparseRouting(nn.Module):
         self.alpha = common_alpha
         self.in_features_shape, self.out_features_shape = self.base_module.layer[0].attention.self.value.weight.shape
         self.router = Router(input_dim=self.in_features_shape, num_experts=self.num_experts)
+        # print("inside constructor of MoEsparseRouting")
 
     def convert_ttcores_into_weights(self, adapter_module: nn.Module, ttlora_cores: list[torch.Tensor]) -> torch.Tensor:
         # Ensure all tensors are on the same device
@@ -108,12 +117,27 @@ class MoEsparseRouting(nn.Module):
                 layer_idx += 1
 
     def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        # print("hidden_states shape: ", hidden_states.shape)
+        # print("Hidden state at first (first 5 elements): ", hidden_states.view(-1)[:5])
+
+        # print("Router grad requirement: ", self.router.router_layer.weight.requires_grad)
+        # print("Inside MoESparseRouting Forward Method")
         router_probs = self.router(hidden_states)
+        # router_probs.requires_grad_(True)
+        # router_probs.retain_grad()
+
         selected_expert_idx = (router_probs == router_probs.max(dim=-1, keepdim=True)[0]).nonzero(as_tuple=True)[1]  # Shape: (batch_size,)
         expert_names = list(self.experts.keys())
         selected_expert_names = [expert_names[idx] for idx in selected_expert_idx.tolist()]
+        print("Selected expert indices: ", selected_expert_names)
 
         batch_size = hidden_states.shape[0]
+        # print("batch_size: ", batch_size)
         self.replace_attention_weights(batch_size, selected_expert_names)
 
-        return self.base_module(hidden_states, *args, **kwargs)
+        output = self.base_module(hidden_states, *args, **kwargs)
+        # print("Output from base module shape: ", output.last_hidden_state.shape)
+        # print("Output values (first 5 elements): ", output.last_hidden_state.view(-1)[:5])
+        # print("-" * 50)
+
+        return output

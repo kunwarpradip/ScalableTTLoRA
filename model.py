@@ -39,10 +39,6 @@ class CustomLightningModule(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         outputs = self(batch["input_ids"], attention_mask=batch["attention_mask"],labels=batch["label"])
         self.log("train_loss", outputs["loss"])
-        print("loss",outputs["loss"])
-        # print("Loss grad_fn:", outputs["loss"].grad_fn)  # The starting point of backpropagation
-        print("gradinfo of router weights", self.model.roberta.encoder.base_module.layer[0].attention.self.query.weight.grad_fn)
-
         return outputs["loss"]  # this is passed to the optimizer for training
 
 
