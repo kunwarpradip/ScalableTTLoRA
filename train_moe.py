@@ -78,7 +78,7 @@ def train_moe_without_ray(config):
         # module.register_forward_hook(forward_hook)
         if name == "roberta.encoder.router.router_layer":
             module.register_forward_hook(forward_hook)
-
+    
     # model.roberta.encoder.router.router_layer.register_forward_hook(forward_hook)
     # model.roberta.encoder.router.router_layer.register_full_backward_hook(backward_hook)
     # model.classifier.out_proj.register_forward_hook(forward_hook)
