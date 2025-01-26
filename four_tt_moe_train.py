@@ -3,7 +3,9 @@ import pandas as pd
 import torch
 import tensorly as tl
 import time
-import tensorflow.keras.backend as K
+import os
+import math
+import sys
 
 from transformers import AutoModelForSequenceClassification
 from torch.utils.data import DataLoader
@@ -11,33 +13,91 @@ from argparse import ArgumentParser
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from functools import partial
 from datasets import load_dataset
-from create_experts import save_adapter_weights
-
+from torch import nn
 from model import CustomLightningModule
-from utils import get_tokenizer, get_ttlora_shape, get_ttlora_rank
-from ttlora_wrapper import TTLoRALinearWrapper
+from utils import get_tokenizer, load_local_dataset
+from one_ttlora_wrapper import TTLoRALinearWrapper
+from four_tt_moe_wrapper import MoEsparseRouting
+from create_experts import parse_expert_files, print_experts_details, save_adapter_weights
 
 tl.set_backend('pytorch')
+# Redirect stdout and stderr to a file
+# sys.stdout = open('output.log', 'w')
+# sys.stderr = open('output.log', 'w')
 
-dataset_name = "mrpc"
+
+dataset_name = "mrpc" 
 model_name = "roberta-base"
 model_path = "./roberta-base/roberta-base-model"
 tokenizer_path = "./roberta-base/roberta-base-tokenizer"
+# torch.autograd.set_detect_anomaly(True)
 
-def train_without_ray(config):
-
+def train_moe_without_ray(config):
+    
     if not torch.cuda.is_available():
-        print("Please switch to a GPU machine before running this notebook.")
+        print("Please switch to a GPU machine before running this code.")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    #load experts
+    saved_adapters_path= config["saved_adapter_path"]
+    experts = parse_expert_files(saved_adapters_path) #dictionary of experts
+
+    '''Load the model and and define the labels'''
+    model = AutoModelForSequenceClassification.from_pretrained(model_path, num_labels=2)
+    model.config.pad_token_id = model.config.eos_token_id
+
+    if model_name == "roberta-base":
+        model.roberta.encoder = MoEsparseRouting(model.roberta.encoder, 
+                                                experts, 
+                                                config["common_alpha"],
+                                                config["m_factors"], 
+                                                config["n_factors"],
+                                                train_router_only=True,
+                                                device=device)
+    print(model)
+
+    for name, param in model.named_parameters():
+        if "router" in name:
+            param.requires_grad = True
+        else:
+            param.requires_grad = False
+
+    def forward_hook(module, input, output):
+        print(f"Forward hook for {module.__class__.__name__}")
+        if isinstance(input, tuple):
+            for i, inp in enumerate(input):
+                if isinstance(inp, torch.Tensor):
+                    print(f" Input Shape: {inp.shape}, grad_fn: {inp.grad_fn}")
+        else:
+            print(f"Input Shape: {input.shape}, grad_fn: {input.grad_fn}")
+        if isinstance(output, torch.Tensor):
+            print(f"Output Shape: {output.shape}, grad_fn: {output.grad_fn}")
+        elif isinstance(output, tuple):
+            for i, out in enumerate(output):
+                if isinstance(out, torch.Tensor):
+                    print(f"Output Shape: {out.shape}, grad_fn: {out.grad_fn}")
+
+    # for name, module in model.named_modules():
+    #     # module.register_forward_hook(forward_hook)
+    #     if name == "roberta.encoder.router.router_layer":
+    #         module.register_forward_hook(forward_hook)
     
     '''Dataset loading and check if loaded correctly'''
-    dataset = load_dataset("glue", dataset_name)         
-    print("-"*50, "This is how the dataset looks like\n", dataset)
+    dataset = load_dataset("glue", dataset_name)
+    # # local dataset loading
+    # dataset = load_local_dataset(dataset_name)         
+    # print("-"*25, "This is how the dataset looks like","-"*25,"\n", dataset, "\n", "-"*100,)
 
     '''Tokenize data and check if correctly tokenized'''
     tokenized = get_tokenizer(tokenizer_path, dataset_name , dataset)
+    # print(tokenized)
 
     '''Create train and validation dataset'''
     train_dataset = tokenized["train"]
+    # print("Example of train_dataset:")
+    # print(train_dataset)
+    
     val_dataset = tokenized["validation"]
 
     '''Dataloader (an iterable) handles number of rows in each batch and how many gpus to use'''
@@ -54,54 +114,15 @@ def train_without_ray(config):
         num_workers=4
         #no need to shuffle the validation data as to get the consistent evaluations
     )
-
-    '''Load the model and and define the labels'''
-    model = AutoModelForSequenceClassification.from_pretrained(model_path, num_labels=2)
-    model.config.pad_token_id = model.config.eos_token_id
-    # print("-"*50, "The is how the model looks like :\n",model)
-    # print("-"*50, "This is how the model config looks like: \n", model.config)
-
-    '''Make model parameters non-trainable and check if it is done correctly'''
-    for param in model.parameters():
-        param.requires_grad = False
-    # print("-"*50, "The model parameters are non-trainable now: \n")
-    # named_parameters = model.named_parameters()
-    # for name, param in named_parameters:
-    #     print(f"{name}: {param.requires_grad}")
-
-    '''Define the shape,rank and other configuration of the tensor train decomposition'''
-    ttlora_shape = get_ttlora_shape(config["shape"])
-    ttlora_rank = get_ttlora_rank(config["rank"], ttlora_shape)
-    ttlora_alpha = config["alpha"]
-    
-    '''Define where to adapt the ttlora'''
-    ttlora_adapter_at_query = True
-    ttlora_adapter_at_value = True
-
-    '''Assign TTLoRA adapters to the model where defined'''
-    # partial is used to fix the arguments (shape, rank and alpha in this case) of the function
-    assign_ttlora = partial(TTLoRALinearWrapper, tt_shape=ttlora_shape, tt_rank=ttlora_rank, alpha=ttlora_alpha)
-
-    if model_name == "roberta-base":
-        for layer in model.roberta.encoder.layer:
-            if ttlora_adapter_at_query:
-                layer.attention.self.query = assign_ttlora(layer.attention.self.query) #layer is sent as module
-            if ttlora_adapter_at_value:
-                layer.attention.self.value = assign_ttlora(layer.attention.self.value) #layer is sent as module
-    
-    if model_name == "llama2-7b":
-        for layer in model.model.layers:
-            if ttlora_adapter_at_query:
-                layer.self_attn.q_proj = assign_ttlora(layer.self_attn.q_proj)
-            if ttlora_adapter_at_value:
-                layer.self_attn.v_proj = assign_ttlora(layer.self_attn.k_proj)
-    print("-"*50, "New TTLoRA adpated model looks like: \n", model)
-
+                
     '''For trainig and evaluation'''
-    lightning_model = CustomLightningModule(model, dataset_name, config["learning_rate"])
+    lightning_model = CustomLightningModule(model, 
+                                            dataset_name, 
+                                            config["learning_rate"])
+    
     early_stopping_callback = EarlyStopping(
         monitor='val_loss',
-        patience=10,
+        patience=30,
         verbose=True,
         mode='min'
         )
@@ -129,9 +150,6 @@ def train_without_ray(config):
     elapsed = end - start
     print(f"Time elapsed {elapsed/60:.2f} min")
 
-    # Example usage after fine-tuning
-    save_adapter_weights(model, f"./saved_adapters/task_{dataset_name}.pth")
-
     '''Model Testing in test and validation datasets'''
     train_acc = trainer.test(lightning_model, dataloaders=train_loader, ckpt_path="best", verbose=False)
     val_acc=trainer.test(lightning_model, dataloaders=val_loader, ckpt_path="best", verbose=False)
@@ -142,26 +160,26 @@ def train_without_ray(config):
     train_params = count_parameters(model)
 
     return {"Taining_Accuracy": train_acc[0]['accuracy'], "Validation_Accuray": val_acc[0]['accuracy'], "Trainable_parameters_count": train_params}
-    # return {"Trainable_parameters_count": train_params}   #used when training is off to do some layer checking
 
 def main():
     config = {
-        "shape": [12, 8, 4, 2, 2, 4, 8, 12],  #roberta shape = 768x768 (attention head shape)
-        # "shape": [16, 8, 8, 4, 4, 8, 8, 16],  #llama shape = 4096x4096 (attention head shape)
-        "rank": 4,
-        "alpha": 8,
+        "saved_adapter_path": "./saved_adapters",
+        "common_alpha" : 8,
         "learning_rate":  1e-3,
+        "m_factors": [12,8,8],
+        "n_factors": [2,2,2,8,12]
     }
     
-    analysis =  train_without_ray(config)
+    analysis =  train_moe_without_ray(config)
     df = pd.DataFrame(list(analysis.items()), columns=['metric', 'value'])
     print(df)
-    filename = f"{dataset_name}_{model_name}.csv"
+    filename = f"_MoE_{dataset_name}_{model_name}_test.csv"
     df.to_csv(filename, index=False)
+    # train_moe_without_ray(config)
 
 if __name__ == "__main__":
+    
     parser = ArgumentParser()
     parser.add_argument("--gpus", type=int, default=1)
     args = parser.parse_args()
     main()
-    

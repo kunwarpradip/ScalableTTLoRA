@@ -18,8 +18,8 @@ import sys
 
 from model import CustomLightningModule
 from utils import get_tokenizer, load_local_dataset, get_ttlora_shape, get_ttlora_rank
-from ttlora_wrapper import TTLoRALinearWrapper
-from moe_wrapper import MoEsparseRouting
+from one_ttlora_wrapper import TTLoRALinearWrapper
+from two_moe_wrapper import MoEsparseRouting
 from create_experts import parse_expert_files, print_experts_details
 
 tl.set_backend('pytorch')

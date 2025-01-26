@@ -20,14 +20,14 @@ from transformers import AutoTokenizer
 
 from model import CustomLightningModule
 from utils import get_tokenizer, load_local_dataset, get_ttlora_shape, get_ttlora_rank
-from ttlora_wrapper import TTLoRALinearWrapper
-from moe_wrapper_separate import MoEsparseRouting
+from one_ttlora_wrapper import TTLoRALinearWrapper
+from three_separate_training import MoEsparseRouting
 from create_experts import parse_expert_files, print_experts_details
 
 tl.set_backend('pytorch')
 # Redirect stdout and stderr to a file
-sys.stdout = open('output.log', 'w')
-sys.stderr = open('output.log', 'w')
+# sys.stdout = open('output.log', 'w')
+# sys.stderr = open('output.log', 'w')
 
 dataset_name = "cola" 
 model_name = "roberta-base"
@@ -44,30 +44,19 @@ def train_moe_without_ray(config):
     saved_adapters_path= config["saved_adapter_path"]
     experts = parse_expert_files(saved_adapters_path)
 
-    '''Load the model and and define the labels'''
-    model = AutoModelForSequenceClassification.from_pretrained(model_path, num_labels=2, output_hidden_states=True)
-    model.config.pad_token_id = model.config.eos_token_id
-
-    if model_name == "roberta-base":
-        model.roberta.encoder = MoEsparseRouting(model.roberta.encoder, experts, config["common_alpha"])
-    
-
-    for name, param in model.named_parameters():
-        if "router" in name or "classifier.out_proj" in name:
-            param.requires_grad = True
-        else:
-            param.requires_grad = False
-
-    # for name, param in model.named_parameters():
-    #     print(name, param.requires_grad)
-
     data_example = {
         "sentence": "Our friends won't buy this analysis, let alone the next one we propose.",
         "label": 1, 
+        "task_label": 0,
         "id": 0,
         } 
     print("-"*25, "This is how the dataset looks like","-"*25,"\n", data_example, "\n", "-"*100,)
-    dataset = Dataset.from_dict({"sentence": [data_example["sentence"]], "label": [data_example["label"]], "id": [data_example["id"]]})
+    dataset = Dataset.from_dict({
+        "sentence": [data_example["sentence"]], 
+        "label": [data_example["label"]], 
+        "task_label": [data_example["task_label"]], 
+        "id": [data_example["id"]]
+    })
     
     def tokenize_function(examples):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path )
@@ -76,19 +65,46 @@ def train_moe_without_ray(config):
         return tokenizer(examples["sentence"], add_special_tokens=True, truncation=True, padding=True)
     tokenized = dataset.map(tokenize_function, batched=True, batch_size=None) 
 
-    tokenized.set_format("torch", columns=["input_ids", "attention_mask", "label"])
-    print("-"*25,"tokenized dataset looks like: ","-"*25,"\n",tokenized["input_ids"],"attention looks like",tokenized["attention_mask"],"label looks like",tokenized["label"])
+    tokenized.set_format("torch", columns=["input_ids", "attention_mask",  "task_label", "label"])
+    print("-"*25,"tokenized dataset looks like: ","-"*25,"\n",tokenized["input_ids"],tokenized["attention_mask"], "task_label", tokenized["task_label"],"label",tokenized["label"])
     
     '''Trying the New way of training the model'''
-    input_ids, attention_mask, target = tokenized["input_ids"], tokenized["attention_mask"], tokenized["label"]
-    grad_param = []
+    input_ids, attention_mask, target, task_labels = (
+        tokenized["input_ids"],
+        tokenized["attention_mask"],
+        tokenized["label"],
+        tokenized["task_label"],
+    )
+    
+    '''Load the model and and define the labels'''
+    model = AutoModelForSequenceClassification.from_pretrained(model_path, num_labels=2, output_hidden_states=True)
+    model.config.pad_token_id = model.config.eos_token_id
 
+    if model_name == "roberta-base":
+        model.roberta.encoder = MoEsparseRouting(model.roberta.encoder, 
+                                                experts, 
+                                                config["common_alpha"],
+                                                config["m_factors"], 
+                                                config["n_factors"],
+                                                train_router_only=True)
+
+    for name, param in model.named_parameters():
+        if "router" in name:
+            param.requires_grad = True
+        else:
+            param.requires_grad = False
+
+    # for name, param in model.named_parameters():
+    #     print(name, param.requires_grad)
+
+    grad_param = []
     print("*"*10,"Before Forward Pass; Look into the grads and grad_fn of parameters whose requires_grad is True","*"*10)
     for name, param in model.named_parameters():
         if param.requires_grad:
             grad_param.append(param)
         if param.requires_grad:
             print(name, ", grad:",param.grad, ", grad_fun:", param.grad_fn)
+    print("-"*50)
 
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(grad_param, lr=config["learning_rate"])
@@ -118,8 +134,8 @@ def train_moe_without_ray(config):
                         print(f"{"Module Name", module.__class__.__name__}")
                         print(f"Shape: {out.shape}, grad_fn: {out.grad_fn}")
 
-    for name, module in model.named_modules():
-        module.register_forward_hook(forward_hook)
+    # for name, module in model.named_modules():
+    #     module.register_forward_hook(forward_hook)
 
     def backward_hook(module, grad_input, grad_output):
         if not hasattr(backward_hook, "called"):
@@ -133,8 +149,8 @@ def train_moe_without_ray(config):
                 print(f"Module: {module.__class__.__name__}")
                 print(f"Grad Output: {grad}")
     
-    for name, module in model.named_modules():
-        module.register_full_backward_hook(backward_hook)
+    # for name, module in model.named_modules():
+    #     module.register_full_backward_hook(backward_hook)
 
     # print("Router weights gradient before forward:", model.roberta.encoder.router.router_layer.weight.grad)
     scores = model(input_ids, attention_mask=attention_mask, output_hidden_states=True)
@@ -147,16 +163,18 @@ def train_moe_without_ray(config):
 
 
     print("Scores logits",scores.logits)
+    # print("Router loss:", router_loss.item())
     _, predicted = torch.max(scores.logits, dim=1)
     print("*"*15,"Predicted label index:", predicted.item(), "*"*15)
     
-    loss = criterion(scores.logits, target)
-    print("*"*15,"Before Loss backward, Loss is :", loss,"*"*15)
+    main_loss = criterion(scores.logits, target)
+    # total_loss = main_loss + router_loss
+    # print(f"Main Loss: {main_loss.item()}, Router Loss: {router_loss.item()}, Total Loss: {total_loss.item()}")
+
     print("*"*25,"Performing Loss backward","*"*25)
-    
     # print("Router weights gradient before loss backward:", model.roberta.encoder.router.router_layer.weight.grad)
 
-    loss.backward()
+    main_loss.backward()
 
     # print("Router weights gradient after loss backward:", model.roberta.encoder.router.router_layer.weight.grad)
 
@@ -191,7 +209,10 @@ def main():
     config = {
         "saved_adapter_path": "./saved_adapters",
         "common_alpha" : 8,
-        "learning_rate":  1e-3,}
+        "learning_rate":  1e-3,
+        "m_factors": [12,8,8],
+        "n_factors": [2,2,2,8,12]
+        }
     
     train_moe_without_ray(config)
 

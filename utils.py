@@ -24,7 +24,7 @@ def get_ttlora_rank(r, ttlora_shape):
     return ttlora_rank
 
 def load_local_dataset(data_name):
-    path = "./data"
+    path = "../../MoE_OthersWorks/llmCourse_MoE/required_codes/data"
     data_path = os.path.join(path, data_name)
     dataset = load_dataset(data_path)
     return dataset
