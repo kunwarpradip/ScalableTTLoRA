@@ -27,7 +27,7 @@ sys.stdout = open('output.log', 'w')
 sys.stderr = open('output.log', 'w')
 
 
-dataset_name = "qnli" 
+dataset_name = "mrpc" 
 model_name = "roberta-base"
 model_path = "./roberta-base/roberta-base-model"
 tokenizer_path = "./roberta-base/roberta-base-tokenizer"
@@ -105,7 +105,7 @@ def train_moe_without_ray(config):
     # apply_hooks(model)
 
     for name, param in model.named_parameters():
-        if "router" in name or 'classifier' in name:
+        if "router" in name:
             param.requires_grad = True
         else:
             param.requires_grad = False
@@ -165,7 +165,7 @@ def train_moe_without_ray(config):
         devices=args.gpus,
         enable_progress_bar=True,
         enable_model_summary=False, 
-        log_every_n_steps=50,
+        # log_every_n_steps=128,
     )
     
     start = time.time()
@@ -194,7 +194,7 @@ def main():
     config = {
         "saved_adapter_path": "./saved_adapters",
         "common_alpha" : 8,
-        "learning_rate":  1e-3,
+        "learning_rate":  1e-5,
         "m_factors": [12,8,8],
         "n_factors": [2,2,2,8,12]
     }

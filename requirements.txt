@@ -92,3 +92,13 @@ wheel                    0.45.1
 wrapt                    1.17.0
 xxhash                   3.5.0
 yarl                     1.18.3
+
+
+# File structure
+
+one - individual expert training with cores reconstruciton and adaptation with the base weights
+two - moe with router but no mask, issue with gradient flow
+three - single input single run training and checkpointing
+four - moe with router and mask, with cores computation, no weight reconstruciton so no weight adaptation
+five - individual expert training with cores computation, no weight reconstruciton so no weight adaptation
+six - individual expert training with cores computation and weight adaptation by decomposition of base weights into tensor cores
