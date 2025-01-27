@@ -22,8 +22,8 @@ from create_experts import parse_expert_files, print_experts_details, save_adapt
 
 tl.set_backend('pytorch')
 # Redirect stdout and stderr to a file
-# sys.stdout = open('output.log', 'w')
-# sys.stderr = open('output.log', 'w')
+sys.stdout = open('output.log', 'w')
+sys.stderr = open('output.log', 'w')
 
 
 dataset_name = "mrpc" 
@@ -31,6 +31,51 @@ model_name = "roberta-base"
 model_path = "./roberta-base/roberta-base-model"
 tokenizer_path = "./roberta-base/roberta-base-tokenizer"
 # torch.autograd.set_detect_anomaly(True)
+
+def apply_hooks(model):
+    def forward_hook(module, input, output):
+        if not hasattr(forward_hook, "called"):
+            forward_hook.called = True
+            print("*"*10,"Inside forward hook; Looking into grad and grad_fn whose grad_fn is not None","*"*10)
+        if isinstance(input, tuple):
+            for i, inp in enumerate(input):
+                if isinstance(inp, torch.Tensor):
+                    if inp.grad_fn is not None:
+                        print(f"{"Module Name", module.__class__.__name__}")
+                        print(f"Shape: {inp.shape}, grad_fn: {inp.grad_fn}")
+        else:
+            if input.grad_fn is not None:
+                print(f"{"Module Name", module.__class__.__name__}")
+                print(f"Shape: {input.shape}, grad_fn: {input.grad_fn}")
+        if isinstance(output, torch.Tensor):
+            if output.grad_fn is not None:
+                print(f"{"Module Name", module.__class__.__name__}")
+                print(f"Shape: {output.shape}, grad_fn: {output.grad_fn}")
+        elif isinstance(output, tuple):
+            for i, out in enumerate(output):
+                if isinstance(out, torch.Tensor):
+                    if out.grad_fn is not None:
+                        print(f"{"Module Name", module.__class__.__name__}")
+                        print(f"Shape: {out.shape}, grad_fn: {out.grad_fn}")
+
+    for name, module in model.named_modules():
+        module.register_forward_hook(forward_hook)
+
+    def backward_hook(module, grad_input, grad_output):
+        if not hasattr(backward_hook, "called"):
+            backward_hook.called = True
+            print("*"*10,"Inside Backward hook; Looking into input and output grad at layers with requires_grad as True","*"*10)
+        if any(param.requires_grad for param in module.parameters()):
+            for i, grad in enumerate(grad_input):
+                print(f"Module: {module.__class__.__name__}")
+                print(f"Grad input: {grad}")
+            for i, grad in enumerate(grad_output):
+                print(f"Module: {module.__class__.__name__}")
+                print(f"Grad Output: {grad}")
+    
+    for name, module in model.named_modules():
+        module.register_full_backward_hook(backward_hook)
+
 
 def train_moe_without_ray(config):
     
@@ -55,33 +100,14 @@ def train_moe_without_ray(config):
                                                 config["n_factors"],
                                                 train_router_only=True,
                                                 device=device)
-    print(model)
+        
+    # apply_hooks(model)
 
     for name, param in model.named_parameters():
         if "router" in name:
             param.requires_grad = True
         else:
             param.requires_grad = False
-
-    def forward_hook(module, input, output):
-        print(f"Forward hook for {module.__class__.__name__}")
-        if isinstance(input, tuple):
-            for i, inp in enumerate(input):
-                if isinstance(inp, torch.Tensor):
-                    print(f" Input Shape: {inp.shape}, grad_fn: {inp.grad_fn}")
-        else:
-            print(f"Input Shape: {input.shape}, grad_fn: {input.grad_fn}")
-        if isinstance(output, torch.Tensor):
-            print(f"Output Shape: {output.shape}, grad_fn: {output.grad_fn}")
-        elif isinstance(output, tuple):
-            for i, out in enumerate(output):
-                if isinstance(out, torch.Tensor):
-                    print(f"Output Shape: {out.shape}, grad_fn: {out.grad_fn}")
-
-    # for name, module in model.named_modules():
-    #     # module.register_forward_hook(forward_hook)
-    #     if name == "roberta.encoder.router.router_layer":
-    #         module.register_forward_hook(forward_hook)
     
     '''Dataset loading and check if loaded correctly'''
     dataset = load_dataset("glue", dataset_name)
@@ -131,7 +157,7 @@ def train_moe_without_ray(config):
     model_checkpoint_callback=ModelCheckpoint(save_top_k=1, mode="max", monitor="val_acc")  
 
     trainer = pl.Trainer(
-        max_epochs=100,
+        max_epochs=1,
         callbacks=[early_stopping_callback, model_checkpoint_callback],
         accelerator="gpu",
         precision="16-mixed",

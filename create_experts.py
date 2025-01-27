@@ -5,8 +5,8 @@ from collections import defaultdict
 import os
 import sys
 
-# sys.stdout = open('output.log', 'w')
-# sys.stderr = open('output.log', 'w')
+sys.stdout = open('output_expert.log', 'w')
+sys.stderr = open('output_expert.log', 'w')
 
 # Save TT-LoRA adapter weights
 def save_adapter_weights(model, save_path):
@@ -66,7 +66,8 @@ def print_experts_details(all_experts):
                 print(attention_type)
                 # print(cores.keys())
                 for core_name, tensor in cores.items():
-                    print(core_name,":",tensor.shape)
+                    print(core_name,":",tensor)
+                    break
                     # print()
                     # if tensor.requires_grad:
                     #     print(f"Tensor {core_name} in {attention_type} of {layer} for task {task_type} requires grad.")
@@ -77,7 +78,7 @@ def print_experts_details(all_experts):
 if __name__== "__main__":
     # Load all adapter weights
     all_experts = parse_expert_files("./saved_adapters")
-    # print_experts_details(all_experts)
+    print_experts_details(all_experts)
     
     # Create a dictionary of experts
     experts_dict = {
@@ -155,10 +156,10 @@ if __name__== "__main__":
     
     
     layers = len(next(iter(all_experts.values())))
-    print("Number of layers:", layers)
+    # print("Number of layers:", layers)
     
     for layer in range(layers):
-        print("layer",layer)
+        # print("layer",layer)
         num_experts = len(all_experts)
         # print("Number of experts:", num_experts)
         access_first_expert = next(iter(all_experts.values()))
@@ -181,31 +182,16 @@ if __name__== "__main__":
         # Convert list of lists of tensors into list of tensors
         query_cores = [torch.stack(core_list) for core_list in query_cores]
         example_core = query_cores[7]
-        print("Example core shape:", example_core.shape)
+        # print("Example core shape:", example_core.shape)
         num_experts = example_core.shape[0]
-        print("Number of experts:", num_experts)
+        # print("Number of experts:", num_experts)
 
         for i, core_list in enumerate(query_cores):
-            print("*"*20, f"Core {i}:", "*"*20)
-            print(type(core_list), core_list.shape)
+            # print("*"*20, f"Core {i}:", "*"*20)
+            # print(type(core_list), core_list.shape)
+            pass
         break
-        # combined_cores = []
-        # for core_list in query_cores:
-        #     combined_core = []
-        #     for i in range(0, len(core_list), 2):
-        #     combined_core.append(core_list[i:i+2])
-        #     combined_cores.append(combined_core)
-
-        # for i, core_group in enumerate(combined_cores):
-        #     print(f"Combined cores for core {i}:")
-        #     for j, core_pair in enumerate(core_group):
-        #     print(f"  Pair {j}: {[tensor.shape for tensor in core_pair]}")
-
-        # for expert, values in experts_dict.items():
-        #     for core_name, tensor in values[f"layer_{layer}"]["query"].items():
-        #         query_cores.append(tensor) 
-        # for i in range(len(query_cores)):
-        #     print(f'query of expert {expert}',query_cores[i].shape)    
+        
    
     
     

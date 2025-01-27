@@ -45,7 +45,7 @@ class CustomLightningModule(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         outputs = self(batch["input_ids"], attention_mask=batch["attention_mask"],
                        labels=batch["label"])
-        self.log("val_loss", outputs["loss"], prog_bar=True)
+        self.log("val_loss", outputs["loss"], prog_bar=False)
 
         logits = outputs["logits"]
         if self.data == "stsb":
@@ -56,10 +56,10 @@ class CustomLightningModule(pl.LightningModule):
             acc=self.val_acc(predicted_labels, batch["label"])
             f1=self.val_f1(predicted_labels, batch["label"])
             final=(acc+f1)/2
-            self.log("val_acc", final, prog_bar=True)
+            self.log("val_acc", final, prog_bar=False)
         else:
             self.val_acc(predicted_labels, batch["label"])
-            self.log("val_acc", self.val_acc, prog_bar=True)
+            self.log("val_acc", self.val_acc, prog_bar=False)
 
     def test_step(self, batch, batch_idx):
         outputs = self(batch["input_ids"], attention_mask=batch["attention_mask"],
@@ -74,10 +74,10 @@ class CustomLightningModule(pl.LightningModule):
             acc = self.test_acc(predicted_labels, batch["label"])
             f1 = self.test_f1(predicted_labels, batch["label"])
             final=(acc+f1)/2
-            self.log("accuracy", final, prog_bar=True)
+            self.log("accuracy", final, prog_bar=False)
         else:
             self.test_acc(predicted_labels, batch["label"])
-            self.log("accuracy", self.test_acc, prog_bar=True)
+            self.log("accuracy", self.test_acc, prog_bar=False)
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
