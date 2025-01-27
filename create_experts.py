@@ -5,8 +5,8 @@ from collections import defaultdict
 import os
 import sys
 
-sys.stdout = open('output_expert.log', 'w')
-sys.stderr = open('output_expert.log', 'w')
+# sys.stdout = open('output_expert.log', 'w')
+# sys.stderr = open('output_expert.log', 'w')
 
 # Save TT-LoRA adapter weights
 def save_adapter_weights(model, save_path):

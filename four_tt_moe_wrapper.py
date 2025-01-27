@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import tensorly as tl
 from tensorly.decomposition import tensor_train
+from functools import partial
 
 tl.set_backend('pytorch')
 
@@ -127,24 +128,17 @@ class MoEsparseRouting(nn.Module):
         self.router = nn.Linear(self.m, self.num_experts, bias=True)
  
     def custom_query_forward(self, X, gates, stacked_query_cores, *args, **kwargs):
-        print("*"*50)
-        if not hasattr(self, "call_count"):
-            self.call_count = 0
-        self.call_count += 1
+        # print("*"*50)
+        # print(f"Inside custom query forward")
 
-        print(f"Inside custom query forward and count is: {self.call_count}")
-
-        # (c) Store as buffer
+        # # (c) Store as buffer
         tt_cores_stacked = stacked_query_cores
-        self.printed_passed_query_cores = False
-        # if self.printed_passed_query_cores == False:
-        # # if not hasattr(self, 'printed_passed_query_cores'):
-        #     print(f"Printing passed stacked_query_cores to custom_query_forward for layer 0 and Batch 0")
-        #     print("*"*50)
-        #     for i, core_list in enumerate(tt_cores_stacked):
-        #         print(f"core{i}:", core_list)
-        #         break
-        #     self.printed_passed_query_cores = True
+        
+        # print(f"Printing passed stacked_query_cores to custom_query_forward")
+        # print("*"*50)
+        # for i, core_list in enumerate(tt_cores_stacked):
+        #     print(f"core{i}:", core_list)
+        #     break
 
         # Count the total TT-cores
         self.num_m = len(self.m_factors)
@@ -254,21 +248,18 @@ class MoEsparseRouting(nn.Module):
         logits = self.router(pooled_hidden_states)
         # print("Router Logits shape", logits.shape,"\n")
         if gumbel==True:
-            print("executing gumbel")
+            # print("executing gumbel")
             gates = F.gumbel_softmax(logits, tau=temperature, hard=True)
         else:
-            print("executing softmax")
+            # print("executing softmax")
             gates = F.softmax(logits, dim=-1)
 
         experts_names = list(self.experts.keys())
         
-        if not hasattr(self, 'printed_gates_and_experts'):
-            print("Gates example of this batch:\n", gates[0:4])
-            print("Experts names", experts_names)   
-            for i in range(4):
-                print(f"Expert selected for input {i} of this batch", experts_names[torch.argmax(gates[i])])
-            print("*"*50)
-            self.printed_gates_and_experts = True
+        # print("Gates example of this batch:\n", gates[0], experts_names[torch.argmax(gates[0])])
+        # for i in range(4):
+        #     print(f"Expert selected for input {i} of this batch", experts_names[torch.argmax(gates[i])])
+        # print("*"*50)
 
         layer_idx = 0
         for layer in self.base_module.layer:
@@ -284,18 +275,13 @@ class MoEsparseRouting(nn.Module):
 
             # (b) Convert list of 8[ list of 4[ tensor of (r_i, factor_dim, r_{i+1})] ] ==> list of 8 [ tensor of (E, r_i, factor_dim, r_{i+1})]
             stacked_query_cores = [torch.stack(core_list) for core_list in list_query_cores]
-            # Check by printing the stacked cores
-            self.printed_query_cores = False
-            # if not hasattr(self, 'printed_query_cores'):
-            # if self.printed_query_cores == False:
-            #     print(f"Printing stacked_query_cores only for layer_{layer_idx} and Batch 0")
-            #     print("*"*50)
-            #     for i, core_list in enumerate(stacked_query_cores):
-            #         print(f"core{i}:", core_list)
-            #         break
-            #     self.printed_query_cores = True
-            layer.attention.self.query.forward = lambda X, *args, **kwargs: self.custom_query_forward(X, gates, stacked_query_cores, *args, **kwargs)
-            
+            # # Check by printing the stacked cores       
+            # print(f"Printing stacked_query_cores only for layer_{layer_idx} and batch size of {X.shape[0]}")
+            # print("*"*50)
+            # for i, core_list in enumerate(stacked_query_cores):
+            #     print(f"core{i}:", core_list)
+            #     break
+            layer.attention.self.query.forward = partial(self.custom_query_forward, gates=gates, stacked_query_cores=stacked_query_cores)            
             ##################################################For Value######################################
             # (a) Collect query TT-cores for all experts
             list_value_cores = [[] for _ in range(len(access_first_expert[f"layer_{layer_idx}"]["value"]))]
@@ -312,7 +298,7 @@ class MoEsparseRouting(nn.Module):
             #     for i, core_list in enumerate(stacked_query_cores):
             #         print(f"core{i}:", core_list.shape)
             #     self.printed_value_cores = True
-            layer.attention.self.value.forward = lambda X, *args, **kwargs: self.custom_value_forward(X, gates, stacked_value_cores, *args, **kwargs)
+            layer.attention.self.value.forward = partial(self.custom_value_forward, gates=gates, stacked_value_cores=stacked_value_cores)            
             
             #increase the layer index
             layer_idx += 1

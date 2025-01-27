@@ -19,6 +19,7 @@ from utils import get_tokenizer, load_local_dataset
 from one_ttlora_wrapper import TTLoRALinearWrapper
 from four_tt_moe_wrapper import MoEsparseRouting
 from create_experts import parse_expert_files, print_experts_details, save_adapter_weights
+import matplotlib.pyplot as plt
 
 tl.set_backend('pytorch')
 # Redirect stdout and stderr to a file
@@ -26,7 +27,7 @@ sys.stdout = open('output.log', 'w')
 sys.stderr = open('output.log', 'w')
 
 
-dataset_name = "mrpc" 
+dataset_name = "qnli" 
 model_name = "roberta-base"
 model_path = "./roberta-base/roberta-base-model"
 tokenizer_path = "./roberta-base/roberta-base-tokenizer"
@@ -104,7 +105,7 @@ def train_moe_without_ray(config):
     # apply_hooks(model)
 
     for name, param in model.named_parameters():
-        if "router" in name:
+        if "router" in name or 'classifier' in name:
             param.requires_grad = True
         else:
             param.requires_grad = False
@@ -157,14 +158,16 @@ def train_moe_without_ray(config):
     model_checkpoint_callback=ModelCheckpoint(save_top_k=1, mode="max", monitor="val_acc")  
 
     trainer = pl.Trainer(
-        max_epochs=1,
+        max_epochs=100,
         callbacks=[early_stopping_callback, model_checkpoint_callback],
         accelerator="gpu",
         precision="16-mixed",
         devices=args.gpus,
-        log_every_n_steps=10,
+        enable_progress_bar=True,
+        enable_model_summary=False, 
+        log_every_n_steps=50,
     )
-
+    
     start = time.time()
     trainer.fit(model=lightning_model,
                 train_dataloaders=train_loader,
