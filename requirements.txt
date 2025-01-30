@@ -102,3 +102,5 @@ three - single input single run training and checkpointing
 four - moe with router and mask, with cores computation, no weight reconstruciton so no weight adaptation
 five - individual expert training with cores computation, no weight reconstruciton so no weight adaptation
 six - individual expert training with cores computation and weight adaptation by decomposition of base weights into tensor cores
+seven - individual expert training with cores computation and weight adaptation through base_module(x) + alpha*(output from cores)
+eight - same as seven + multiple datasets combined training
