@@ -14,11 +14,11 @@ from create_experts import save_adapter_weights
 
 from model import CustomLightningModule
 from utils import get_tokenizer, get_ttlora_shape, get_ttlora_rank
-from one_ttlora_wrapper import TTLoRALinearWrapper
+from seven_ttlorawrapper import TTLoRALinearWrapper_withcores
 
 tl.set_backend('pytorch')
 
-dataset_name = "mrpc"
+dataset_name = "sst2"
 model_name = "roberta-base"
 model_path = "./roberta-base/roberta-base-model"
 tokenizer_path = "./roberta-base/roberta-base-tokenizer"
@@ -37,20 +37,22 @@ def train_without_ray(config):
 
     '''Create train and validation dataset'''
     train_dataset = tokenized["train"]
+    print("Train dataset shapes: ", train_dataset['input_ids'].shape, train_dataset['attention_mask'].shape, train_dataset['label'].shape)
     val_dataset = tokenized["validation"]
+    print("Validation dataset shapes: ", val_dataset['input_ids'].shape, val_dataset['attention_mask'].shape, val_dataset['label'].shape)
 
     '''Dataloader (an iterable) handles number of rows in each batch and how many gpus to use'''
     train_loader = DataLoader(
         dataset=train_dataset,
-        batch_size=128, #max of roberta base is 512 tokens
+        batch_size=512, #max of roberta base is 512 tokens
         shuffle=True,   #data shuffles at the beginning of each epoch
-        num_workers=4   #separate subprocesses to load data in parallel
+        num_workers=8   #separate subprocesses to load data in parallel
     )
 
     val_loader = DataLoader(
         dataset=val_dataset,
-        batch_size=128,
-        num_workers=4
+        batch_size=512,
+        num_workers=8
         #no need to shuffle the validation data as to get the consistent evaluations
     )
 
@@ -79,13 +81,15 @@ def train_without_ray(config):
 
     '''Assign TTLoRA adapters to the model where defined'''
     # partial is used to fix the arguments (shape, rank and alpha in this case) of the function
-    assign_ttlora = partial(TTLoRALinearWrapper, tt_shape=ttlora_shape, tt_rank=ttlora_rank, alpha=ttlora_alpha)
+    assign_ttlora = partial(TTLoRALinearWrapper_withcores, tt_shape=ttlora_shape, tt_rank=ttlora_rank, alpha=ttlora_alpha)
 
     if model_name == "roberta-base":
         for layer in model.roberta.encoder.layer:
             if ttlora_adapter_at_query:
+                # query_weight_copy = layer.attention.self.query.weight.clone()
                 layer.attention.self.query = assign_ttlora(layer.attention.self.query) #layer is sent as module
             if ttlora_adapter_at_value:
+                # value_weight_copy = layer.attention.self.value.weight.clone()
                 layer.attention.self.value = assign_ttlora(layer.attention.self.value) #layer is sent as module
     
     if model_name == "llama2-7b":
@@ -129,7 +133,7 @@ def train_without_ray(config):
     print(f"Time elapsed {elapsed/60:.2f} min")
 
     # Example usage after fine-tuning
-    save_adapter_weights(model, f"./saved_adapters/task_{dataset_name}.pth")
+    save_adapter_weights(model, f"./saved_adapters_new/task_{dataset_name}.pth")
 
     '''Model Testing in test and validation datasets'''
     train_acc = trainer.test(lightning_model, dataloaders=train_loader, ckpt_path="best", verbose=False)
@@ -155,7 +159,7 @@ def main():
     analysis =  train_without_ray(config)
     df = pd.DataFrame(list(analysis.items()), columns=['metric', 'value'])
     print(df)
-    filename = f"{dataset_name}_{model_name}.csv"
+    filename = f"AdaptWithCoresplusbaseweight_{dataset_name}_{model_name}.csv"
     df.to_csv(filename, index=False)
 
 if __name__ == "__main__":

@@ -23,8 +23,8 @@ import matplotlib.pyplot as plt
 
 tl.set_backend('pytorch')
 # Redirect stdout and stderr to a file
-sys.stdout = open('output.log', 'w')
-sys.stderr = open('output.log', 'w')
+# sys.stdout = open('output.log', 'w')
+# sys.stderr = open('output.log', 'w')
 
 
 dataset_name = "mrpc" 
@@ -122,9 +122,6 @@ def train_moe_without_ray(config):
 
     '''Create train and validation dataset'''
     train_dataset = tokenized["train"]
-    # print("Example of train_dataset:")
-    # print(train_dataset)
-    
     val_dataset = tokenized["validation"]
 
     '''Dataloader (an iterable) handles number of rows in each batch and how many gpus to use'''
@@ -163,9 +160,9 @@ def train_moe_without_ray(config):
         accelerator="gpu",
         precision="16-mixed",
         devices=args.gpus,
-        enable_progress_bar=True,
-        enable_model_summary=False, 
-        # log_every_n_steps=128,
+        # enable_progress_bar=True,
+        # enable_model_summary=False, 
+        log_every_n_steps=10,
     )
     
     start = time.time()
@@ -194,7 +191,7 @@ def main():
     config = {
         "saved_adapter_path": "./saved_adapters",
         "common_alpha" : 8,
-        "learning_rate":  1e-5,
+        "learning_rate":  1e-2,
         "m_factors": [12,8,8],
         "n_factors": [2,2,2,8,12]
     }

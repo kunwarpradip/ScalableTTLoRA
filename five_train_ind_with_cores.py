@@ -14,7 +14,7 @@ from create_experts import save_adapter_weights
 
 from model import CustomLightningModule
 from utils import get_tokenizer, get_ttlora_shape, get_ttlora_rank
-from one_ttlora_wrapper import TTLoRALinearWrapper
+from five_ind_ttlorawrapper import TTLoRALinearWrapper_withcores
 
 tl.set_backend('pytorch')
 
@@ -79,7 +79,7 @@ def train_without_ray(config):
 
     '''Assign TTLoRA adapters to the model where defined'''
     # partial is used to fix the arguments (shape, rank and alpha in this case) of the function
-    assign_ttlora = partial(TTLoRALinearWrapper, tt_shape=ttlora_shape, tt_rank=ttlora_rank, alpha=ttlora_alpha)
+    assign_ttlora = partial(TTLoRALinearWrapper_withcores, tt_shape=ttlora_shape, tt_rank=ttlora_rank, alpha=ttlora_alpha)
 
     if model_name == "roberta-base":
         for layer in model.roberta.encoder.layer:
@@ -129,7 +129,7 @@ def train_without_ray(config):
     print(f"Time elapsed {elapsed/60:.2f} min")
 
     # Example usage after fine-tuning
-    save_adapter_weights(model, f"./saved_adapters/task_{dataset_name}.pth")
+    # save_adapter_weights(model, f"./saved_adapters/task_{dataset_name}.pth")
 
     '''Model Testing in test and validation datasets'''
     train_acc = trainer.test(lightning_model, dataloaders=train_loader, ckpt_path="best", verbose=False)
@@ -155,7 +155,7 @@ def main():
     analysis =  train_without_ray(config)
     df = pd.DataFrame(list(analysis.items()), columns=['metric', 'value'])
     print(df)
-    filename = f"{dataset_name}_{model_name}.csv"
+    filename = f"WithCores_{dataset_name}_{model_name}.csv"
     df.to_csv(filename, index=False)
 
 if __name__ == "__main__":

@@ -187,7 +187,7 @@ def train_moe_without_ray(config):
 
 def main():
     config = {
-        "saved_adapter_path": "./saved_adapters",
+        "saved_adapter_path": "./saved_adapters_new",
         "common_alpha" : 8,
         "learning_rate":  1e-2,
         "m_factors": [12,8,8],

@@ -56,8 +56,12 @@ def tensorized_multiplication_experts(self, X, tt_cores, m_factors, n_factors, g
         core_expanded = core.unsqueeze(0).to(self.device)  # [1, 1, E, r_i, m_i, r_{i+1}]
         # if i == 0:
         #     print("\nCore expanded shape with experts to match gate and select cores for all the inputs", core_expanded.shape)
-        masked_core = (core_expanded * gates_exp).sum(dim=1).to(self.device)
-        # print("\nMasked Core shape", masked_core[0:5])
+        masked_core_m = (core_expanded * gates_exp).sum(dim=1).to(self.device)
+        if not hasattr(self, 'print_count1'):
+            print("\n","*"*50)
+            print("gates", gates[0:5])
+            print(f"\nMasked Core for core {i}", masked_core_m[0:5])
+            self.print_count1 = True
         # if i == 0:
         #     print("\nMasked Core shape", masked_core.shape)
         # => [B, r_i, m_i, r_{i+1}]
@@ -65,7 +69,7 @@ def tensorized_multiplication_experts(self, X, tt_cores, m_factors, n_factors, g
         # (c) einsum with tt_state
         # tt_state => [B, r_i, ..., m] (the last dimension is the factor dim if i < num_m)
         eq_in = "b r ... m, b r m p -> b p ..."
-        tt_state = torch.einsum(eq_in, tt_state, masked_core).to(self.device)
+        tt_state = torch.einsum(eq_in, tt_state, masked_core_m).to(self.device)
         # if i==0:
         #     print("\nShape of tt_state after einsum with masked core to reduce input_dim", tt_state.shape)
         # if i==len(m_factors)-1:
@@ -79,12 +83,18 @@ def tensorized_multiplication_experts(self, X, tt_cores, m_factors, n_factors, g
         # Mask by gating
         gates_exp = gates.view(B, -1, 1, 1, 1).to(self.device)
         core_expanded = core.unsqueeze(0).to(self.device)  # => [1, E, r_i, n_i, r_{i+1}]
-        masked_core = (core_expanded * gates_exp).sum(dim=1).to(self.device)
+        masked_core_n = (core_expanded * gates_exp).sum(dim=1).to(self.device)
+        if not hasattr(self, 'print_count'):
+            print("\n","*"*50)
+            print("i", i)
+            print("gates", gates[0:5])
+            print(f"\nMasked Core for core {i+start_n}", masked_core_n[0:5])
+            self.print_count = True
         # => [B, r_i, n_i, r_{i+1}]
 
         # eq_out: "b r ..., b r n p -> b p ... n"
         eq_out = "b r ..., b r n p -> b p ... n"
-        tt_state = torch.einsum(eq_out, tt_state, masked_core).to(self.device)
+        tt_state = torch.einsum(eq_out, tt_state, masked_core_n).to(self.device)
         # if i==0:
         #     print("\nShape of tt_state after einsum with masked core to add output_dim", tt_state.shape)
         # if i==len(n_factors)-1:
@@ -103,7 +113,8 @@ class MoEsparseRouting(nn.Module):
                  m_factors:list, 
                  n_factors:list,
                  train_router_only:bool,
-                 device: torch.device):
+                 device: torch.device
+                 ):
         super().__init__()
         self.base_module = base_module
         self.m_factors = m_factors
@@ -127,12 +138,13 @@ class MoEsparseRouting(nn.Module):
         # A trainable router => from [B, m] => [B, E]
         self.router = nn.Linear(self.m, self.num_experts, bias=True)
  
-    def custom_query_forward(self, X, gates, stacked_query_cores, *args, **kwargs):
+    def custom_query_forward(self, X, base_layer_weight, base_layer_bias, gates, stacked_query_cores, *args, **kwargs):
         # print("*"*50)
         # print(f"Inside custom query forward")
 
         # # (c) Store as buffer
         tt_cores_stacked = stacked_query_cores
+        base_layer_out = F.linear(input=X, weight=base_layer_weight, bias=base_layer_bias)
         
         # print(f"Printing passed stacked_query_cores to custom_query_forward")
         # print("*"*50)
@@ -178,13 +190,14 @@ class MoEsparseRouting(nn.Module):
         out = ttlora_x_computation*alpha
 
         # scaling_factor = torch.mean(Q) + torch.mean(X)
-        return out
+        return out + base_layer_out
 
-    def custom_value_forward(self, X, gates, stacked_value_cores, *args, **kwargs):
+    def custom_value_forward(self, X, base_layer_weight, base_layer_bias, gates, stacked_value_cores, *args, **kwargs):
         # print("*"*50)
         # print("Inside custom value forward")
         # (c) Store as buffer
         tt_cores_stacked = stacked_value_cores
+        base_layer_out = F.linear(input=X, weight=base_layer_weight, bias=base_layer_bias)
 
         # if not hasattr(self, 'printed_passed_value_cores'):
         #     print(f"Printing passed stacked_value_cores to custom_value_forward for layer 0 and Batch 0")
@@ -233,13 +246,12 @@ class MoEsparseRouting(nn.Module):
 
         # scaling_factor = torch.mean(V) + torch.mean(X)
         out = ttlora_x_computation*alpha
-        return out
+        return out + base_layer_out
 
 
     def forward(self, X, *args, **kwargs):
         # print("*"*50)
         # print("Inside MoEsparseRouting Forward")
-        gumbel=True 
         temperature=1.0
         B = X.size(0)
 
@@ -247,25 +259,31 @@ class MoEsparseRouting(nn.Module):
         pooled_hidden_states = X.mean(dim=1)
         logits = self.router(pooled_hidden_states)
         # print("Router Logits shape", logits.shape,"\n")
-        if gumbel==True:
-            # print("executing gumbel")
-            gates = F.gumbel_softmax(logits, tau=temperature, hard=True)
-        else:
-            # print("executing softmax")
-            gates = F.softmax(logits, dim=-1)
+        gates = F.gumbel_softmax(logits, tau=temperature, hard=True)
 
         experts_names = list(self.experts.keys())
+        if not hasattr(self, 'printed_experts_core_0'):
+            print("\n","*"*50)
+            for i in range(5):
+                print(f"Gate looks like for input {i} of this batch", gates[i])
+                print(f"Expert selected for input {i} of this batch", experts_names[torch.argmax(gates[i])])
+                print(f"selected experts core0 for input{i}", self.experts[experts_names[torch.argmax(gates[i])]]["layer_0"]["query"]["ttlora_core_0"])
+            self.printed_experts_core_0 = True
         
-        # print("Gates example of this batch:\n", gates[0], experts_names[torch.argmax(gates[0])])
-        # for i in range(4):
-        #     print(f"Expert selected for input {i} of this batch", experts_names[torch.argmax(gates[i])])
-        # print("*"*50)
+        if not hasattr(self, 'printed_experts_core_4'):
+            print("\n","*"*50)
+            for i in range(5):
+                print(f"Gate looks like for input {i} of this batch", gates[i])
+                print(f"Expert selected for input {i} of this batch", experts_names[torch.argmax(gates[i])])
+                print(f"selected experts core3 for input{i}", self.experts[experts_names[torch.argmax(gates[i])]]["layer_0"]["query"]["ttlora_core_3"])
+            self.printed_experts_core_4 = True
 
+        
         layer_idx = 0
         for layer in self.base_module.layer:
             # Start Collecting the TT-cores from here, for this layer, for all experts
             access_first_expert = next(iter(self.experts.values()))
-            ##################################################For Value######################################
+            ##################################################For query######################################
             # (a) Collect query TT-cores for all experts
             # list_query_cores.clear()
             list_query_cores = [[] for _ in range(len(access_first_expert[f"layer_{layer_idx}"]["query"]))]
@@ -281,7 +299,11 @@ class MoEsparseRouting(nn.Module):
             # for i, core_list in enumerate(stacked_query_cores):
             #     print(f"core{i}:", core_list)
             #     break
-            layer.attention.self.query.forward = partial(self.custom_query_forward, gates=gates, stacked_query_cores=stacked_query_cores)            
+            layer.attention.self.query.forward = partial(self.custom_query_forward, 
+                                                         base_layer_weight=layer.attention.self.query.weight, 
+                                                         base_layer_bias= layer.attention.self.query.bias,
+                                                         gates=gates, 
+                                                         stacked_query_cores=stacked_query_cores)            
             ##################################################For Value######################################
             # (a) Collect query TT-cores for all experts
             list_value_cores = [[] for _ in range(len(access_first_expert[f"layer_{layer_idx}"]["value"]))]
@@ -298,7 +320,11 @@ class MoEsparseRouting(nn.Module):
             #     for i, core_list in enumerate(stacked_query_cores):
             #         print(f"core{i}:", core_list.shape)
             #     self.printed_value_cores = True
-            layer.attention.self.value.forward = partial(self.custom_value_forward, gates=gates, stacked_value_cores=stacked_value_cores)            
+            layer.attention.self.value.forward = partial(self.custom_value_forward, 
+                                                         base_layer_weight=layer.attention.self.value.weight,
+                                                         base_layer_bias= layer.attention.self.value.bias,
+                                                         gates=gates, 
+                                                         stacked_value_cores=stacked_value_cores)            
             
             #increase the layer index
             layer_idx += 1
