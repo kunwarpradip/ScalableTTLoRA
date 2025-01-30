@@ -154,7 +154,7 @@ def load_mixed_datasets(dataset_names, tokenizer_path):
         train_tokenized_dataset = train_tokenized_dataset.remove_columns(
             [col for col in train_tokenized_dataset.column_names if col not in ["input_ids", "attention_mask", "label"]]
         )
-        print("Train tokenized dataset: ", train_tokenized_dataset['input_ids'].shape, train_tokenized_dataset['attention_mask'].shape, train_tokenized_dataset['label'].shape)
+        # print("Train tokenized dataset: ", train_tokenized_dataset['input_ids'].shape, train_tokenized_dataset['attention_mask'].shape, train_tokenized_dataset['label'].shape)
         validation_tokenized_dataset = tokenized["validation"]
         validation_tokenized_dataset = validation_tokenized_dataset.remove_columns(
             [col for col in train_tokenized_dataset.column_names if col not in ["input_ids", "attention_mask", "label"]]
