@@ -1,5 +1,7 @@
 **Note: Models and tokenizers are supposed to be saved in the folder structure as ./models/{model_name}-models and ./models/{model_name}-tokenizer (the options for model_name are: "roberta-base", "llama-3-8b", "llama-3-70b"**
+
 **Note: Best Trained Checkpoints are supposed to be save in the folder structure as ./trained_checkpoints/{model_name}/experts/**
+
 **Note: The best checkpoints in the folder for each expert is supposed to be one but not multiple best checkpoints**
 
 **Step 1: Train Individual Experts**
